@@ -2,11 +2,14 @@ package collectors
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tinkerologie/unraid-management-agent/daemon/constants"
 	"github.com/tinkerologie/unraid-management-agent/daemon/domain"
 	"gopkg.in/ini.v1"
 )
@@ -23,6 +26,10 @@ func TestNewRegistrationCollector(t *testing.T) {
 
 	if collector.ctx != ctx {
 		t.Error("RegistrationCollector context not set correctly")
+	}
+
+	if collector.varIniPath != constants.VarIni {
+		t.Errorf("varIniPath = %q, want %q", collector.varIniPath, constants.VarIni)
 	}
 }
 
@@ -291,6 +298,8 @@ func isValidTimestamp(s string) bool {
 	return true
 }
 
+// TestParseRegistration checks type, state and both dates for each key type,
+// including the #285 regression where a Pro key reported expired.
 func TestParseRegistration(t *testing.T) {
 	now := time.Unix(1792454400, 0) // 2026-10-19
 	past := "1601401334"            // 2020-09-29
@@ -406,6 +415,7 @@ func TestParseRegistration(t *testing.T) {
 	}
 }
 
+// TestParseRegistrationNameAndGUID checks the GUID and server name are read.
 func TestParseRegistrationNameAndGUID(t *testing.T) {
 	cfg, err := ini.Load([]byte("regTy=\"Pro\"\nregGUID=\"ABCD-1234\"\nNAME=\"Tower\"\n"))
 	if err != nil {
@@ -421,6 +431,7 @@ func TestParseRegistrationNameAndGUID(t *testing.T) {
 	}
 }
 
+// TestParseRegistrationFixture parses the Unraid 7.3.1 var.ini fixture.
 func TestParseRegistrationFixture(t *testing.T) {
 	cfg, err := ini.Load("testdata/fixtures/unraid-7.3.1/var.ini")
 	if err != nil {
@@ -436,6 +447,7 @@ func TestParseRegistrationFixture(t *testing.T) {
 	}
 }
 
+// TestParseRegistrationJSON locks the wire format for a key with no dates.
 func TestParseRegistrationJSON(t *testing.T) {
 	cfg, err := ini.Load([]byte("regTy=\"Pro\"\nregTm=\"1601401334\"\nregExp=\"\"\n"))
 	if err != nil {
@@ -456,6 +468,8 @@ func TestParseRegistrationJSON(t *testing.T) {
 	}
 }
 
+// checkUnix fails the test unless got is zero for an empty want, or equals the
+// Unix timestamp in want.
 func checkUnix(t *testing.T, field string, got time.Time, want string) {
 	t.Helper()
 	if want == "" {
@@ -470,5 +484,43 @@ func checkUnix(t *testing.T, field string, got time.Time, want string) {
 	}
 	if got.IsZero() || got.Unix() != wantTS {
 		t.Errorf("%s = %v, want Unix %s", field, got, want)
+	}
+}
+
+// TestCollectRegistrationFromFile reads a var.ini through the collector's
+// injectable path and returns the parsed registration.
+func TestCollectRegistrationFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "var.ini")
+	content := "NAME=\"Tower\"\nregTy=\"Pro\"\nregTm=\"1601401334\"\nregExp=\"\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	collector := NewRegistrationCollector(&domain.Context{Hub: domain.NewEventBus(10)})
+	collector.varIniPath = path
+
+	reg, err := collector.collectRegistration()
+	if err != nil {
+		t.Fatalf("collectRegistration: %v", err)
+	}
+	if reg.Type != "pro" || reg.State != "valid" || reg.ServerName != "Tower" {
+		t.Errorf("got type=%q state=%q server=%q, want pro/valid/Tower", reg.Type, reg.State, reg.ServerName)
+	}
+	if reg.Timestamp.IsZero() {
+		t.Error("Timestamp not set")
+	}
+}
+
+// TestCollectRegistrationLoadError returns the ini.Load error when var.ini is
+// missing.
+func TestCollectRegistrationLoadError(t *testing.T) {
+	collector := NewRegistrationCollector(&domain.Context{Hub: domain.NewEventBus(10)})
+	collector.varIniPath = filepath.Join(t.TempDir(), "missing.ini")
+
+	reg, err := collector.collectRegistration()
+	if err == nil {
+		t.Fatal("collectRegistration: want error for a missing file")
+	}
+	if reg != nil {
+		t.Errorf("registration = %+v, want nil on error", reg)
 	}
 }

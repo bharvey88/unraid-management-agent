@@ -15,12 +15,13 @@ import (
 
 // RegistrationCollector collects Unraid registration/license information
 type RegistrationCollector struct {
-	ctx *domain.Context
+	ctx        *domain.Context
+	varIniPath string // path to var.ini; injectable for tests
 }
 
 // NewRegistrationCollector creates a new registration collector
 func NewRegistrationCollector(ctx *domain.Context) *RegistrationCollector {
-	return &RegistrationCollector{ctx: ctx}
+	return &RegistrationCollector{ctx: ctx, varIniPath: constants.VarIni}
 }
 
 // Start begins collecting registration information at the specified interval
@@ -75,10 +76,10 @@ func (c *RegistrationCollector) Collect() {
 
 // collectRegistration reads registration information from var.ini
 func (c *RegistrationCollector) collectRegistration() (*dto.Registration, error) {
-	logger.Debug("Registration: Reading from %s", constants.VarIni)
+	logger.Debug("Registration: Reading from %s", c.varIniPath)
 
 	// Parse var.ini for registration information
-	cfg, err := ini.Load(constants.VarIni)
+	cfg, err := ini.Load(c.varIniPath)
 	if err != nil {
 		logger.Error("Registration: Failed to load file: %v", err)
 		return nil, err
